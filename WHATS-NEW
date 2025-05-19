@@ -1,3 +1,6 @@
+lrzip-next: May 19, 2025 v 0.14.1
+Change default LZMA dictionary sizes as per SDK 24.09.
+
 lrzip-next: February 4, 2025 v 0.14.0
 Rewrite of lrz_stretch and costfactor computation.
 Removal of nloops, enc_loops functions and #define
