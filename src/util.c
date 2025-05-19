@@ -104,26 +104,27 @@ void setup_overhead(rzip_control *control)
 {
 	/* Work out the compression overhead per compression thread for the
 	 * compression back-ends that need a lot of ram
-	 * and set Dictionary size */
+	 * and set Dictionary size
+	 * Updated per SDK 24.09 */
 	if (LZMA_COMPRESS) {
 		if (control->dictSize == 0) {
 			switch (control->compression_level) {
 			case 1:
 			case 2:
-			case 3: control->dictSize = (1 << (control->compression_level * 2 + 16));
-				break; // 256KB to 4MB
-			case 4:
-			case 5:
-			case 6: control->dictSize = (1 << (control->compression_level + 19));
-				break; // 8MB to 32MB
-			case 7: control->dictSize = (1 << 25);
+			case 3:
+			case 4:	control->dictSize = (1 << 24);
+				break; // 16MB
+			case 5:	control->dictSize = (1 << 25);
 				break; // 32MB
-			case 8: control->dictSize = (1 << 26);
+			case 6: control->dictSize = (1 << 26);
 				break; // 64MB
-			case 9: control->dictSize = (1 << 27);
-				break; // 128MB -- this is maximum for 32 bits
-			default: control->dictSize = (1 << 24);
-				break; // 16MB -- should never reach here
+			case 7: control->dictSize = (1 << 27);
+				break; // 128MB
+			case 8:
+			case 9: control->dictSize = (1 << 28);
+				break; // 256MB -- Remove limit for 32bit.
+			default: control->dictSize = (1 << 25);
+				break; // 32MB -- should never reach here
 			}
 		}
 		/* LZMA spec shows memory requirements as 6MB, not 4MB and state size
