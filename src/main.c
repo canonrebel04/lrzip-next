@@ -172,10 +172,10 @@ default chosen by heuristic dependent on ram and chosen compression\n");
 	print_output("	-h, -?, --help		show help\n");
 	print_output("	-H, --hash [hash code]	Set hash to compute (default md5) 1-13 (see manpage)\n");
 	print_output("	-i, --info		show compressed file information\n");
-	print_output("	-P, --progress		show compression progress\n");
+	print_output("	-p, --threads value	Set processor count to override number of threads\n");
+	print_output("	-P, --progress		show compression/decompression progress\n");
 	print_output("	-q, --quiet		don't show compression progress\n");
 	print_output("	-Q, --very-quiet	don't show any output\n");
-	print_output("	-p, --threads value	Set processor count to override number of threads\n");
 	print_output("	-v[v], --verbose	Increase verbosity\n");
 	print_output("	-V, --version		display software version and license\n");
 	print_output("\nLRZIP=NOCONFIG environment variable setting can be used to bypass lrzip.conf.\n\

@@ -37,7 +37,9 @@ Here is a summary of the options to lrzip-next.
  \-n, \-\-no-compress       no backend compression - prepare for other compressor
  \-z, \-\-zpaq              zpaq compression (best, extreme compression, extremely slow)
  \-Z, \-\-zstd              zstd compression
- \-L, \-\-level level       Set lzma/bzip2/gzip compression level (1-9, default 7)
+ \-L#, \-\-level #          Set lzma/bzip2/gzip compression level (1-9, default 7)
+ \-\-fast                  alias for -L1
+ \-\-best                  alias for -L9
  \-\-dictsize = ds         Set lzma Dictionary Size for LZMA ds=0 to 40 expressed as 2<<11, 3 * 2<<10, 2<<12, 3 * 2<<11...2<<31-1
  \-\-nobemt                Inhibit backend compressor using multiple threads
  \-\-zpaqbs = bs           Set ZPAQ Block Size overriding defaults. 1-11, 2^zpaqbs * 1MB
@@ -59,7 +61,7 @@ Additional Compression Options:
  \-E, \-\-emethod method    Select Encryption method, 1=AES 128, 2=AES 256 bit
  \-D, \-\-delete            delete existing files
  \-f, \-\-force             force overwrite of any existing files
- \-k, \-\-keep-broken       keep broken or damaged output files
+ \-K, \-\-keep-broken       keep broken or damaged output files
  \-o, \-\-outfile filename  specify the output file name and/or path
  \-O, \-\-outdir directory  specify the output directory when -o is not used
  \-S, \-\-suffix suffix     specify compressed suffix (default '.lrz')
@@ -70,6 +72,7 @@ Low level Compression Options:
  \-N, \-\-nice-level value  Set nice value to value (default 19)
  \-R, \-\-rzip-level level  Set independent RZIP Compression Level (1-9) for pre-processing (default=compression level)
  \-T, \-\-threshold [limit] Disable LZ4 compressibility testing OR set limit to determine compressibiity (1-99)
+                         Note: Since limit is optional, the short option must not have a space. e.g. -T75, not -T 75
  \-U, \-\-unlimited         Use unlimited window size beyond ramsize (potentially much slower)
  \-w, \-\-window size       maximum compression window in hundreds of MB
                          default chosen by heuristic dependent on ram and chosen compression
@@ -83,6 +86,7 @@ Low level Compression Options:
  \-H, \-\-hash[=hash code]  Set hash to compute (default md5) and display hash integrity information
  \-i, \-\-info              show compressed file information
  \-p, \-\-threads value     Set processor count to override number of threads
+ \-P, \-\-progress          show compression/decompression progress
  \-q, \-\-quiet             don't show compression progress
  \-Q, \-\-very-quiet        don't show any output
  \-v[v], \-\-verbose        Increase verbosity
@@ -438,6 +442,8 @@ Normally lrzip-next will scale according to the number of CPUs it detects. Using
 this will override the value in case you wish to use less CPUs to either
 decrease the load on your machine, or to improve compression. Setting it to
 1 will maximise compression but will not attempt to use more than one CPU.
+.IP "\fB-P | --progress\fP"
+Show compression/decompression progress.
 .IP "\fB-q | --quiet\fP"
 If this option is specified then lrzip-next will not show the
 percentage progress while compressing. Note that compression happens in
