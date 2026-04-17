@@ -1,6 +1,13 @@
 lrzip-next - Long Range ZIP
 ======================
 
+## Development Suspended (April 2026)
+
+After 19 years of work on `lrzip` and `lrzip-next` I have decided to suspend
+development. Please see [this discussion](https://github.com/pete4abw/lrzip-next/discussions/171) for more details.
+
+I will monitor for any issues and respond to queries.
+
 ## LZMA SDK 24.09 (May 2025)
 
 See **FEATURES** and **WHATS-NEW** files for list of lrzip-next enhancements.
