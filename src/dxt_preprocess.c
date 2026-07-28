@@ -37,17 +37,19 @@ int dxt_transpose_buffer(const unsigned char *in_buf, i64 in_len,
 	} else if (memmem(in_buf, MIN(in_len, 4096), "DXT5", 4) != NULL) {
 		dxt_type = 5;
 		block_size = 16;
-	} else {
-		/* Heuristic check: if buffer length is a multiple of 8 or 16 */
-		if (in_len % 16 == 0 && in_len >= 65536) {
-			dxt_type = 5;
-			block_size = 16;
-		} else if (in_len % 8 == 0 && in_len >= 65536) {
+	} else if (in_len >= 128 && memcmp(in_buf, "DDS ", 4) == 0) {
+		uint32_t fourcc = *(uint32_t *)(in_buf + 84);
+		if (fourcc == 0x31545844) { /* DXT1 */
 			dxt_type = 1;
 			block_size = 8;
+		} else if (fourcc == 0x33545844 || fourcc == 0x35545844) { /* DXT3 / DXT5 */
+			dxt_type = 5;
+			block_size = 16;
 		} else {
 			return 0;
 		}
+	} else {
+		return 0;
 	}
 
 	blocks = in_len / block_size;
