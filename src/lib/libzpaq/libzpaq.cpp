@@ -2124,11 +2124,13 @@ size_t Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
   assert(initTables);
   assert(ht.size()==size_t(16)<<sizebits);
   int chk=cxt>>sizebits&255;
-  size_t h0=(cxt*16)&(ht.size()-16);
-  if (ht[h0]==chk) return h0;
+  size_t h0=(((cxt * 0xbf58476d1ce4e5b9ULL) >> 32) * 16) & (ht.size() - 16);
   size_t h1=h0^16;
-  if (ht[h1]==chk) return h1;
   size_t h2=h0^32;
+  __builtin_prefetch(&ht[h0], 0, 3);
+  __builtin_prefetch(&ht[h1], 0, 3);
+  if (ht[h0]==chk) return h0;
+  if (ht[h1]==chk) return h1;
   if (ht[h2]==chk) return h2;
   if (ht[h0+1]<=ht[h1+1] && ht[h0+1]<=ht[h2+1])
     return memset(&ht[h0], 0, 16), ht[h0]=chk, h0;

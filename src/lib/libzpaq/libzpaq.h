@@ -1176,16 +1176,12 @@ private:
 
   // bound x to a 12 bit signed int
   int clamp2k(int x) {
-    if (x<-2048) return -2048;
-    else if (x>2047) return 2047;
-    else return x;
+    return std::min(std::max(x, -2048), 2047);
   }
 
   // bound x to a 20 bit signed int
   int clamp512k(int x) {
-    if (x<-(1<<19)) return -(1<<19);
-    else if (x>=(1<<19)) return (1<<19)-1;
-    else return x;
+    return std::min(std::max(x, -(1<<19)), (1<<19)-1);
   }
 
   // Get cxt in ht, creating a new row if needed
