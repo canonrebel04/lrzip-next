@@ -185,6 +185,44 @@ static inline double block_entropy(const unsigned char *buf, i64 len)
 	return entropy;
 }
 
+/* Auto-detect optimal delta stride (1, 2, 4, 8 bytes) by evaluating entropy reduction.
+ * Returns optimal stride (1, 2, 4, 8) if entropy improves by >= 0.4 bits/byte, or 0 if none.
+ */
+static inline int auto_detect_delta_stride(const unsigned char *buf, i64 len)
+{
+	if (!buf || len < 1024)
+		return 0;
+
+	i64 sample_len = MIN(len, 65536);
+	double raw_ent = block_entropy(buf, sample_len);
+	if (raw_ent < 1.0 || raw_ent > 7.95)
+		return 0;
+
+	int candidate_strides[] = {1, 2, 4, 8};
+	int best_stride = 0;
+	double best_ent = raw_ent;
+
+	unsigned char sample[65536];
+	for (int s = 0; s < 4; s++) {
+		int stride = candidate_strides[s];
+		if (sample_len <= stride)
+			continue;
+
+		memcpy(sample, buf, sample_len);
+		uchar delta_state[DELTA_STATE_SIZE];
+		Delta_Init(delta_state);
+		Delta_Encode(delta_state, stride, sample, sample_len);
+
+		double ent = block_entropy(sample, sample_len);
+		if (ent < best_ent - 0.4) {
+			best_ent = ent;
+			best_stride = stride;
+		}
+	}
+
+	return best_stride;
+}
+
 /*
   ***** COMPRESSION FUNCTIONS *****
 
@@ -1658,7 +1696,7 @@ retry:
 		}
 	}
 
-	/* Media-Aware Preprocessing Passes (DXT plane transpose + Deflate recompression) */
+	/* Media-Aware Preprocessing Passes (DXT plane transpose + Deflate recompression + Auto-Stride Delta) */
 	if (!NO_COMPRESS && cti->s_len >= 1024) {
 		unsigned char *prep_buf = NULL;
 		i64 prep_len = 0;
@@ -1680,6 +1718,17 @@ retry:
 			cti->s_buf = prep_buf;
 			cti->s_len = prep_len;
 			cti->c_len = prep_len;
+		}
+		/* 3. Auto-Stride Delta Detection for Structured Binary Data */
+		else if (!FILTER_USED) {
+			int auto_stride = auto_detect_delta_stride(cti->s_buf, cti->s_len);
+			if (auto_stride > 0) {
+				print_maxverbose("Thread %d: Auto-stride delta encoding applied (stride = %d)\n",
+						 current_thread, auto_stride);
+				uchar delta_state[DELTA_STATE_SIZE];
+				Delta_Init(delta_state);
+				Delta_Encode(delta_state, auto_stride, cti->s_buf, cti->s_len);
+			}
 		}
 	}
 	/* Shannon entropy pre-check: skip compression for blocks that are
