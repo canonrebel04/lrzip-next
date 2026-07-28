@@ -20,7 +20,15 @@
 LIBZPAQ is a C++ library for compression and decompression of data
 conforming to the ZPAQ level 2 standard. See http://mattmahoney.net/zpaq/
 See libzpaq.h for additional documentation.
+
+AVX2 SIMD acceleration: compiled with -mavx2 if available.
 */
+
+// AVX2 support: include intrinsics if compiler has AVX2 enabled
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define ZPAQ_AVX2 1
+#endif
 
 #include "libzpaq.h"
 #include <string.h>
@@ -176,6 +184,7 @@ void SHA1::process() {
   h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e;
 }
 
+/* prune, not needed for lrzip
 //////////////////////////// SHA256 //////////////////////////
 
 void SHA256::init() {
@@ -703,6 +712,7 @@ void random(char* buf, int n) {
   if (n>=1 && (buf[0]=='z' || buf[0]=='7'))
     buf[0]^=0x80;
 }
+*/ // End Prune
 
 //////////////////////////// Component ///////////////////////
 
@@ -1910,31 +1920,33 @@ int Predictor::predict0() {
         cr.cxt=h[i]+(c8&cp[5]);
         cr.cxt=(cr.cxt&(cr.c-1))*m; // pointer to row of weights
         assert(cr.cxt<=cr.cm.size()-m);
-        const int* wt=(const int*)&cr.cm[cr.cxt];
-        const int* p_src=&p[cp[2]];
-        int sum=0;
-        int j=0;
-#if defined(__AVX2__)
-        __m256i vsum = _mm256_setzero_si256();
-        for (; j <= m - 8; j += 8) {
-          __m256i vwt = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wt + j));
-          __m256i vp  = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p_src + j));
-          __m256i vwt_shift = _mm256_srai_epi32(vwt, 8);
-          __m256i vprod = _mm256_mullo_epi32(vwt_shift, vp);
-          vsum = _mm256_add_epi32(vsum, vprod);
+        int* wt=(int*)&cr.cm[cr.cxt];
+        p[i]=0;
+#if defined(ZPAQ_AVX2)
+        // AVX2 SIMD: process 8 weights per iteration
+        __m256i acc = _mm256_setzero_si256();
+        int j = 0;
+        for (; j+8<=m; j+=8) {
+          __m256i w8  = _mm256_loadu_si256((__m256i*)(wt+j));
+          __m256i p8  = _mm256_loadu_si256((__m256i*)(p+cp[2]+j));
+          __m256i ws  = _mm256_srai_epi32(w8, 8);
+          __m256i mul = _mm256_mullo_epi32(ws, p8);
+          acc = _mm256_add_epi32(acc, mul);
         }
-        __m128i vlow  = _mm256_castsi256_si128(vsum);
-        __m128i vhigh = _mm256_extracti128_si256(vsum, 1);
-        __m128i vhead = _mm_add_epi32(vlow, vhigh);
-        __m128i vshuf = _mm_shuffle_epi32(vhead, _MM_SHUFFLE(1, 0, 3, 2));
-        vhead = _mm_add_epi32(vhead, vshuf);
-        vshuf = _mm_shuffle_epi32(vhead, _MM_SHUFFLE(2, 3, 0, 1));
-        vhead = _mm_add_epi32(vhead, vshuf);
-        sum = _mm_cvtsi128_si32(vhead);
+        // horizontal reduction
+        __m128i lo   = _mm256_castsi256_si128(acc);
+        __m128i hi   = _mm256_extracti128_si256(acc, 1);
+        __m128i sum4 = _mm_add_epi32(lo, hi);
+        __m128i sum2 = _mm_add_epi32(sum4, _mm_srli_si128(sum4, 8));
+        __m128i sum1 = _mm_add_epi32(sum2, _mm_srli_si128(sum2, 4));
+        p[i] = _mm_cvtsi128_si32(sum1);
+        for (; j<m; ++j)
+          p[i] += (wt[j]>>8)*p[cp[2]+j];
+#else
+        for (int j=0; j<m; ++j)
+          p[i]+=(wt[j]>>8)*p[cp[2]+j];
 #endif
-        for (; j < m; ++j)
-          sum += (wt[j] >> 8) * p_src[j];
-        p[i] = clamp2k(sum >> 8);
+        p[i]=clamp2k(p[i]>>8);
       }
         break;
       case ISSE: { // sizebits j -- c=hi, cxt=bh
@@ -2046,35 +2058,27 @@ void Predictor::update0(int y) {
         assert(cr.cxt+m<=cr.cm.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>4;
         int* wt=(int*)&cr.cm[cr.cxt];
-        const int* p_src = &p[cp[2]];
-        int j=0;
-#if defined(__AVX2__)
-        __m256i verr  = _mm256_set1_epi32(err);
-        __m256i v4096 = _mm256_set1_epi32(1 << 12);
-        __m256i vmin  = _mm256_set1_epi32(-524288);
-        __m256i vmax  = _mm256_set1_epi32(524287);
-
-        for (; j <= m - 8; j += 8) {
-          __m256i vwt = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wt + j));
-          __m256i vp  = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p_src + j));
-
-          // err * p[cp[2]+j]
-          __m256i vprod = _mm256_mullo_epi32(verr, vp);
-          
-          // (err * p + 4096) >> 13
-          __m256i vdelta = _mm256_srai_epi32(_mm256_add_epi32(vprod, v4096), 13);
-          
-          // wt + vdelta
-          __m256i vres = _mm256_add_epi32(vwt, vdelta);
-          
-          // clamp512k
-          __m256i vclamped = _mm256_min_epi32(_mm256_max_epi32(vres, vmin), vmax);
-          
-          _mm256_storeu_si256(reinterpret_cast<__m256i*>(wt + j), vclamped);
+#if defined(ZPAQ_AVX2)
+        // AVX2 SIMD: update 8 weights per iteration
+        const __m256i vmin = _mm256_set1_epi32(-524288);
+        const __m256i vmax = _mm256_set1_epi32(524287);
+        const __m256i vbias = _mm256_set1_epi32(1<<12);
+        __m256i verr = _mm256_set1_epi32(err);
+        int j = 0;
+        for (; j+8<=m; j+=8) {
+          __m256i vp  = _mm256_loadu_si256((__m256i*)(p+cp[2]+j));
+          __m256i vw  = _mm256_loadu_si256((__m256i*)(wt+j));
+          __m256i upd = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(verr,vp),vbias),13);
+          __m256i nw  = _mm256_add_epi32(vw, upd);
+          nw = _mm256_min_epi32(_mm256_max_epi32(nw, vmin), vmax);
+          _mm256_storeu_si256((__m256i*)(wt+j), nw);
         }
+        for (; j<m; ++j)
+          wt[j]=clamp512k(wt[j]+((err*p[cp[2]+j]+(1<<12))>>13));
+#else
+        for (int j=0; j<m; ++j)
+          wt[j]=clamp512k(wt[j]+((err*p[cp[2]+j]+(1<<12))>>13));
 #endif
-        for (; j < m; ++j)
-          wt[j]=clamp512k(wt[j]+((err*p_src[j]+(1<<12))>>13));
       }
         break;
       case ISSE: { // sizebits j  -- c=hi, cxt=bh
@@ -2163,7 +2167,7 @@ int Decoder::decode(int p) {
     high=high<<8|255;
     low=low<<8;
     low+=(low==0);
-    int c=get();
+    int c=in->get();
     if (c<0) error("unexpected end of file");
     curr=curr<<8|c;
   }
@@ -2175,7 +2179,7 @@ int Decoder::decompress() {
   if (pr.isModeled()) {  // n>0 components?
     if (curr==0) {  // segment initialization
       for (int i=0; i<4; ++i)
-        curr=curr<<8|get();
+        curr=curr<<8|in->get();
     }
     if (decode(0)) {
       if (curr!=0) error("decoding end of stream");
@@ -2193,11 +2197,11 @@ int Decoder::decompress() {
   }
   else {
     if (curr==0) {
-      for (int i=0; i<4; ++i) curr=curr<<8|get();
+      for (int i=0; i<4; ++i) curr=curr<<8|in->get();
       if (curr==0) return -1;
     }
     --curr;
-    return get();
+    return in->get();
   }
 }
 
@@ -2206,23 +2210,23 @@ int Decoder::skip() {
   int c=-1;
   if (pr.isModeled()) {
     while (curr==0)  // at start?
-      curr=get();
-    while (curr && (c=get())>=0)  // find 4 zeros
+      curr=in->get();
+    while (curr && (c=in->get())>=0)  // find 4 zeros
       curr=curr<<8|c;
-    while ((c=get())==0) ;  // might be more than 4
+    while ((c=in->get())==0) ;  // might be more than 4
     return c;
   }
   else {
     if (curr==0)  // at start?
-      for (int i=0; i<4 && (c=get())>=0; ++i) curr=curr<<8|c;
+      for (int i=0; i<4 && (c=in->get())>=0; ++i) curr=curr<<8|c;
     while (curr>0) {
       while (curr>0) {
         --curr;
-        if (get()<0) return error("skipped to EOF"), -1;
+        if (in->get()<0) return error("skipped to EOF"), -1;
       }
-      for (int i=0; i<4 && (c=get())>=0; ++i) curr=curr<<8|c;
+      for (int i=0; i<4 && (c=in->get())>=0; ++i) curr=curr<<8|c;
     }
-    if (c>=0) c=get();
+    if (c>=0) c=in->get();
     return c;
   }
 }
@@ -2298,7 +2302,7 @@ bool Decompresser::findBlock(double* memptr) {
   U32 h1=0x3D49B113, h2=0x29EB7F93, h3=0x2614BE13, h4=0x3828EB13;
   // Rolling hashes initialized to hash of first 13 bytes
   int c;
-  while ((c=dec.get())!=-1) {
+  while ((c=dec.in->get())!=-1) {
     h1=h1*12+c;
     h2=h2*20+c;
     h3=h3*28+c;
@@ -2309,9 +2313,9 @@ bool Decompresser::findBlock(double* memptr) {
   if (c==-1) return false;
 
   // Read header
-  if ((c=dec.get())!=1 && c!=2) error("unsupported ZPAQ level");
-  if (dec.get()!=1) error("unsupported ZPAQL type");
-  z.read(&dec);
+  if ((c=dec.in->get())!=1 && c!=2) error("unsupported ZPAQ level");
+  if (dec.in->get()!=1) error("unsupported ZPAQL type");
+  z.read(dec.in);
   if (c==1 && z.header.isize()>6 && z.header[6]==0)
     error("ZPAQ level 1 requires at least 1 component");
   if (memptr) *memptr=z.memory();
@@ -2324,10 +2328,10 @@ bool Decompresser::findBlock(double* memptr) {
 // If a segment is found, write the filename and return true, else false.
 bool Decompresser::findFilename(Writer* filename) {
   assert(state==FILENAME);
-  int c=dec.get();
+  int c=dec.in->get();
   if (c==1) {  // segment found
     while (true) {
-      c=dec.get();
+      c=dec.in->get();
       if (c==-1) error("unexpected EOF");
       if (c==0) {
         state=COMMENT;
@@ -2350,12 +2354,12 @@ void Decompresser::readComment(Writer* comment) {
   assert(state==COMMENT);
   state=DATA;
   while (true) {
-    int c=dec.get();
+    int c=dec.in->get();
     if (c==-1) error("unexpected EOF");
     if (c==0) break;
     if (comment) comment->put(c);
   }
-  if (dec.get()!=0) error("missing reserved byte");
+  if (dec.in->get()!=0) error("missing reserved byte");
 }
 
 // Decompress n bytes, or all if n < 0. Return false if done
@@ -2402,7 +2406,7 @@ void Decompresser::readSegmentEnd(char* sha1string) {
     decode_state=SKIP;
   }
   else if (state==SEGEND)
-    c=dec.get();
+    c=dec.in->get();
   state=FILENAME;
 
   // Read checksum
@@ -2412,7 +2416,7 @@ void Decompresser::readSegmentEnd(char* sha1string) {
   else if (c==253) {
     if (sha1string) sha1string[0]=1;
     for (int i=1; i<=20; ++i) {
-      c=dec.get();
+      c=dec.in->get();
       if (sha1string) sha1string[i]=c;
     }
   }
