@@ -32,10 +32,10 @@ Notice:
  - This script exists because of how lrzip-next behaves.
  - Beware the -f flag, it stands for what it says...
 "
-    [[ $1 == "" ]] && {
-        printf "lrzntar: no arguments given\n";
-        return 1;
-    }
+    if [[ $# -eq 0 || "$1" == "-h" || "$1" == "--help" ]]; then
+        printf "%s\n" "$hv"
+        return 0
+    fi
     local p=("${@:1:$(($#-1))}") s="${!#}" vopt=("lrz") \
           v_w=0 v_S=0 v_D=0 v_p=0 v_q=0 v_L=0 \
           v_n=0 v_l=0 v_b=0 v_g=0 v_z=0 v_U=0 \
@@ -43,10 +43,32 @@ Notice:
           v_H=0 v_c=0 v_k=0 v_o=0 v_O=0 v_m=0 x= i="$(pwd)"
     tar --version &> /dev/null \
         || { printf "lrzntar: no tar in your path\n"; return 1; }
-    lrzip-next --version &> /dev/null \
-        || { printf "lrzntar: no lrzip-next in your path\n"; return 1; }
-    lrzncat --version &> /dev/null \
-        || { printf "lrzntar: no lrzncat in your path\n"; return 1; }
+
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+    local LRZIP_CMD=""
+    local LRZCAT_CMD=""
+
+    if [[ -x "${SCRIPT_DIR}/lrzip-next" ]]; then
+        LRZIP_CMD="${SCRIPT_DIR}/lrzip-next"
+    elif [[ -x "./lrzip-next" ]]; then
+        LRZIP_CMD="./lrzip-next"
+    elif command -v lrzip-next &>/dev/null; then
+        LRZIP_CMD="lrzip-next"
+    else
+        printf "lrzntar: lrzip-next not found in current directory (%s) or PATH\n" "${SCRIPT_DIR}"
+        return 1
+    fi
+
+    if [[ -x "${SCRIPT_DIR}/lrzncat" ]]; then
+        LRZCAT_CMD="${SCRIPT_DIR}/lrzncat"
+    elif [[ -x "./lrzncat" ]]; then
+        LRZCAT_CMD="./lrzncat"
+    elif command -v lrzncat &>/dev/null; then
+        LRZCAT_CMD="lrzncat"
+    else
+        LRZCAT_CMD="${LRZIP_CMD} -d -O -"
+    fi
+
     while getopts w:O:S:DqL:nlbgzUm:TN:p:vfo:d:tVhHck x; do
         [[ $x == [tV] ]] && {
             printf "lrzntar: invalid option for lrzntar: %s\n" "$x";
@@ -57,7 +79,7 @@ Notice:
     done
     [[ $(basename "$0") == lrznuntar ]] \
         && { ((v_d=${#vopt[@]})); vopt[${#vopt[@]}]="$s"; }
-    { ! (($#)) || ((v_h)); } && {
+    ((v_h)) && {
         printf "%s\n" "$hv"
         return
     }
@@ -93,10 +115,10 @@ Notice:
             i="./"
         fi
         [ ! -z "$s" ] && {
-            lrzncat ${p[@]// /\\ } "$s" | tar x -C "$i"
+            ${LRZCAT_CMD} ${p[@]// /\\ } "$s" | tar x -C "$i"
             x=$?
         } || {
-            lrzncat ${p[@]// /\\ } | tar x -C "$i"
+            ${LRZCAT_CMD} ${p[@]// /\\ } | tar x -C "$i"
             x=$?
         }
     } || {
@@ -133,7 +155,7 @@ Notice:
                 return 1
             }
         fi
-        tar c "$s" | lrzip-next "${p[@]}"
+        tar c "$s" | ${LRZIP_CMD} "${p[@]}"
         x=$?
     }
     return $x
