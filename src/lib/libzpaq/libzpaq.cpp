@@ -29,6 +29,13 @@ AVX2 SIMD acceleration: compiled with -mavx2 if available.
 #include <immintrin.h>
 #define ZPAQ_AVX2 1
 #endif
+#if defined(__SSE2__) || defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>
+#include <immintrin.h>
+#endif
+#if defined(__VPCLMULQDQ__) || defined(__PCLMUL__)
+#include <wmmintrin.h>
+#endif
 
 #include "libzpaq.h"
 #include <string.h>
@@ -728,6 +735,7 @@ void Component::init() {
   cm.resize(0);
   ht.resize(0);
   a16.resize(0);
+  v.resize(0);
 }
 
 ////////////////////////// StateTable ////////////////////////
@@ -1829,6 +1837,7 @@ void Predictor::init() {
         assert(m>=1);
         cr.c=(size_t(1)<<cp[1]); // size (number of contexts)
         cr.cm.resize(m, cp[1]);  // wt[size][m]
+        cr.v.resize(m, cp[1]);   // v[size][m] momentum velocity
         for (size_t j=0; j<cr.cm.size(); ++j)
           cr.cm[j]=65536/m;
         break;
@@ -2058,27 +2067,42 @@ void Predictor::update0(int y) {
         assert(cr.cxt+m<=cr.cm.size());
         int err=(y*32767-squash(p[i]))*cp[4]>>4;
         int* wt=(int*)&cr.cm[cr.cxt];
+        int* v=(int*)&cr.v[cr.cxt];
+        const int* p_src = &p[cp[2]];
+        int j = 0;
 #if defined(ZPAQ_AVX2)
-        // AVX2 SIMD: update 8 weights per iteration
+        // AVX2 SIMD: NAG momentum lookahead weight update for 8 weights per iteration
         const __m256i vmin = _mm256_set1_epi32(-524288);
         const __m256i vmax = _mm256_set1_epi32(524287);
         const __m256i vbias = _mm256_set1_epi32(1<<12);
         __m256i verr = _mm256_set1_epi32(err);
-        int j = 0;
         for (; j+8<=m; j+=8) {
-          __m256i vp  = _mm256_loadu_si256((__m256i*)(p+cp[2]+j));
-          __m256i vw  = _mm256_loadu_si256((__m256i*)(wt+j));
-          __m256i upd = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(verr,vp),vbias),13);
-          __m256i nw  = _mm256_add_epi32(vw, upd);
-          nw = _mm256_min_epi32(_mm256_max_epi32(nw, vmin), vmax);
-          _mm256_storeu_si256((__m256i*)(wt+j), nw);
+          __m256i vp     = _mm256_loadu_si256((__m256i*)(p_src+j));
+          __m256i vwt    = _mm256_loadu_si256((__m256i*)(wt+j));
+          __m256i vv_old = _mm256_loadu_si256((__m256i*)(v+j));
+
+          __m256i vdelta = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(verr, vp), vbias), 13);
+          __m256i vv_old_half = _mm256_srai_epi32(vv_old, 1);
+          __m256i vv_new = _mm256_add_epi32(vv_old_half, vdelta);
+          _mm256_storeu_si256((__m256i*)(v+j), vv_new);
+
+          __m256i vdiff = _mm256_sub_epi32(vv_new, vv_old);
+          __m256i vdiff_half = _mm256_srai_epi32(vdiff, 1);
+          __m256i vlookahead = _mm256_add_epi32(vv_new, vdiff_half);
+
+          __m256i vres = _mm256_add_epi32(vwt, vlookahead);
+          __m256i vclamped = _mm256_min_epi32(_mm256_max_epi32(vres, vmin), vmax);
+          _mm256_storeu_si256((__m256i*)(wt+j), vclamped);
         }
-        for (; j<m; ++j)
-          wt[j]=clamp512k(wt[j]+((err*p[cp[2]+j]+(1<<12))>>13));
-#else
-        for (int j=0; j<m; ++j)
-          wt[j]=clamp512k(wt[j]+((err*p[cp[2]+j]+(1<<12))>>13));
 #endif
+        for (; j<m; ++j) {
+          int delta = (err*p_src[j]+(1<<12))>>13;
+          int v_old = v[j];
+          int v_new = (v_old >> 1) + delta;
+          v[j] = v_new;
+          int lookahead = v_new + ((v_new - v_old) >> 1);
+          wt[j] = clamp512k(wt[j] + lookahead);
+        }
       }
         break;
       case ISSE: { // sizebits j  -- c=hi, cxt=bh
@@ -2124,14 +2148,38 @@ size_t Predictor::find(Array<U8>& ht, int sizebits, U32 cxt) {
   assert(initTables);
   assert(ht.size()==size_t(16)<<sizebits);
   int chk=cxt>>sizebits&255;
+#if defined(__VPCLMULQDQ__) || defined(__PCLMUL__)
+  __m128i a = _mm_cvtsi64_si128(static_cast<unsigned long long>(cxt));
+  __m128i k = _mm_cvtsi64_si128(0xbf58476d1ce4e5b9ULL);
+  __m128i clm = _mm_clmulepi64_si128(a, k, 0x00);
+  U64 hash64 = static_cast<U64>(_mm_cvtsi128_si64(clm));
+  size_t h0 = (((hash64) >> 32) * 16) & (ht.size() - 16);
+#else
   size_t h0=(((cxt * 0xbf58476d1ce4e5b9ULL) >> 32) * 16) & (ht.size() - 16);
+#endif
   size_t h1=h0^16;
   size_t h2=h0^32;
   __builtin_prefetch(&ht[h0], 0, 3);
   __builtin_prefetch(&ht[h1], 0, 3);
+#if defined(__SSE2__) || defined(__x86_64__) || defined(_M_X64)
+  __m128i target = _mm_set1_epi8(static_cast<char>(chk));
+  __m128i ctrl0 = _mm_load_si128(reinterpret_cast<const __m128i*>(&ht[h0]));
+  __m128i ctrl1 = _mm_load_si128(reinterpret_cast<const __m128i*>(&ht[h1]));
+  __m128i ctrl2 = _mm_load_si128(reinterpret_cast<const __m128i*>(&ht[h2]));
+
+  int mask0 = _mm_movemask_epi8(_mm_cmpeq_epi8(ctrl0, target));
+  if (mask0 & 1) return h0;
+
+  int mask1 = _mm_movemask_epi8(_mm_cmpeq_epi8(ctrl1, target));
+  if (mask1 & 1) return h1;
+
+  int mask2 = _mm_movemask_epi8(_mm_cmpeq_epi8(ctrl2, target));
+  if (mask2 & 1) return h2;
+#else
   if (ht[h0]==chk) return h0;
   if (ht[h1]==chk) return h1;
   if (ht[h2]==chk) return h2;
+#endif
   if (ht[h0+1]<=ht[h1+1] && ht[h0+1]<=ht[h2+1])
     return memset(&ht[h0], 0, 16), ht[h0]=chk, h0;
   else if (ht[h1+1]<ht[h2+1])

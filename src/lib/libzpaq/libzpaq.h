@@ -1092,6 +1092,7 @@ struct Component {
   Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
   Array<U8> ht;   // ICM/ISSE hash table[0..size1][0..15] and MATCH buf
   Array<U16> a16; // MIX weights
+  Array<int> v;   // MIX momentum velocity
   void init();    // initialize to all 0
   Component() {init();}
 };
