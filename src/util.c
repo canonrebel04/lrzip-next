@@ -648,13 +648,30 @@ void *stream_memcpy(void *dest, const void *src, size_t n)
 	unsigned char *d = (unsigned char *)dest;
 	const unsigned char *s = (const unsigned char *)src;
 
-	/* Align destination buffer to 256-bit (32-byte) boundary */
+	/* Pipeline buffers < 16 MB: use fast AVX2 temporal SIMD stores to keep data
+	 * in L1/L2/L3 CPU cache for immediate re-reading by compression pipelines */
+	if (n < (16 * 1024 * 1024)) {
+		while (n >= 32) {
+			__m256i chunk = _mm256_loadu_si256((const __m256i *)s);
+			_mm256_storeu_si256((__m256i *)d, chunk);
+			d += 32;
+			s += 32;
+			n -= 32;
+		}
+		while (n > 0) {
+			*d++ = *s++;
+			n--;
+		}
+		return dest;
+	}
+
+	/* Huge out-of-cache disk writes >= 16 MB: align destination buffer to 256-bit
+	 * (32-byte) boundary and use non-temporal streaming stores to bypass cache */
 	while (n > 0 && ((uintptr_t)d & 31) != 0) {
 		*d++ = *s++;
 		n--;
 	}
 
-	/* Perform 256-bit aligned buffer transfers using AVX2 non-temporal stores */
 	while (n >= 32) {
 		__m256i chunk = _mm256_loadu_si256((const __m256i *)s);
 		_mm256_stream_si256((__m256i *)d, chunk);
@@ -663,7 +680,6 @@ void *stream_memcpy(void *dest, const void *src, size_t n)
 		n -= 32;
 	}
 
-	/* Copy remaining bytes */
 	while (n > 0) {
 		*d++ = *s++;
 		n--;
