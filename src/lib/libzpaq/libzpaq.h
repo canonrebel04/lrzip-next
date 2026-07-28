@@ -247,7 +247,7 @@ The hash is computed as hash := hash x N1 + next_byte + 1 (mod hash table
 size). Thus, N1 = 12 selects a higher order context, and N1 = 48 selects a
 lower order.
 
-A word model ('w') is an ICM-ISSE chain of length N1 (orders 0..N1-1)
+A word model ('w") is an ICM-ISSE chain of length N1 (orders 0..N1-1)
 in which the contexts are whole words. A word is defined as the set
 of characters in the range N2..N2+N3-1 after ANDing with N4. The context
 is hashed using multiplier N5. Memory is halved by N6. The default is
@@ -490,7 +490,7 @@ compression algorithm:
     "  d=0 hash b-- hash *d=a (put order 2 context hash in H[0] pointed by D)"
     "  d++ b-- hash b-- hash *d=a (put order 4 context in H[1]) "
     "  halt "
-    "end  (no pre/post processing) ",
+    "end " (no pre/post processing) ",
     args,     // Arguments $1 through $9 to ZPAQL code (unused, can be NULL)
     &out);    // Writer* to write pcomp command (default is NULL)
 
@@ -711,7 +711,7 @@ respectively.
 
 You can pass up to 9 signed numeric arguments in args[]. In any
 place that a number "N" is allowed, you can write "$M" or "$M+N"
-(like "$1" or "$9+25") and value args[M-1]+N will be substituted.
+(like "$1" or $9+25") and value args[M-1]+N will be substituted.
 
 ZPAQL allows (nested) comments in parenthesis. It is not case sensitive.
 If there are input errors, then error() will report the error. If the
@@ -839,8 +839,15 @@ Use at your own risk.
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cstring>
 #include <algorithm>
-#include <math.h>
+
+#if defined(_MSC_VER) || defined(__MINGW32__)
+#include <malloc.h>
+#endif
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include <immintrin.h>
+#endif
 
 namespace libzpaq {
 
@@ -886,21 +893,24 @@ int toU16(const char* p);
 // a(i) - index mod n, n must be a power of 2
 // a.size() - gets n
 template <typename T>
-class Array {
-  T *data;     // user location of [0] on a 64 byte boundary
+class alignas(64) Array {
+  T *data;     // 64-byte aligned pointer
   size_t n;    // user size
-  int offset;  // distance back in bytes to start of actual allocation
   void operator=(const Array&);  // no assignment
   Array(const Array&);  // no copy
 public:
-  Array(size_t sz=0, int ex=0): data(0), n(0), offset(0) {
+  Array(size_t sz=0, int ex=0): data(0), n(0) {
     resize(sz, ex);} // [0..sz-1] = 0
   void resize(size_t sz, int ex=0); // change size, erase content to zeros
   ~Array() {resize(0);}  // free memory
   size_t size() const {return n;}  // get size
   int isize() const {return int(n);}  // get size as an int
   T& operator[](size_t i) {assert(n>0 && i<n); return data[i];}
+  const T& operator[](size_t i) const {assert(n>0 && i<n); return data[i];}
   T& operator()(size_t i) {assert(n>0 && (n&(n-1))==0); return data[i&(n-1)];}
+  const T& operator()(size_t i) const {assert(n>0 && (n&(n-1))==0); return data[i&(n-1)];}
+  T* get_aligned_data() { return data; }
+  const T* get_aligned_data() const { return data; }
 };
 
 // Change size to sz<<ex elements of 0
@@ -911,22 +921,33 @@ void Array<T>::resize(size_t sz, int ex) {
     if (sz>sz*2) error("Array too big");
     sz*=2, --ex;
   }
-  if (n>0) {
-    assert(offset>0 && offset<=64);
-    assert((char*)data-offset);
-    ::free((char*)data-offset);
+  if (data) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    _mm_free(data);
+#else
+    ::free(data);
+#endif
+    data = 0;
   }
-  n=0;
-  offset=0;
-  if (sz==0) return;
-  n=sz;
-  const size_t nb=128+n*sizeof(T);  // test for overflow
-  if (nb<=128 || (nb-128)/sizeof(T)!=n) n=0, error("Array too big");
-  data=(T*)::calloc(nb, 1);
-  if (!data) n=0, error("Out of memory");
-  offset=64-(((char*)data-(char*)0)&63);
-  assert(offset>0 && offset<=64);
-  data=(T*)((char*)data+offset);
+  n = 0;
+  if (sz == 0) return;
+  n = sz;
+  const size_t bytes = n * sizeof(T);
+  const size_t aligned_bytes = (bytes + 63) & ~size_t(63);
+#if defined(_MSC_VER) || defined(__MINGW32__)
+  data = static_cast<T*>(_mm_malloc(aligned_bytes, 64));
+#else
+  void* ptr = 0;
+  if (posix_memalign(&ptr, 64, aligned_bytes) != 0) {
+    ptr = 0;
+  }
+  data = static_cast<T*>(ptr);
+#endif
+  if (!data) {
+    n = 0;
+    error("Out of memory");
+  }
+  memset(data, 0, aligned_bytes);
 }
 
 //////////////////////////// SHA1 ////////////////////////////
@@ -954,7 +975,6 @@ private:
   void process();   // hash 1 block
 };
 
-/* prune, not needed for lrzip
 //////////////////////////// SHA256 //////////////////////////
 
 // For computing SHA-256 checksums
@@ -1015,8 +1035,6 @@ void stretchKey(char* out, const char* key, const char* salt);
 // Fill buf[0..n-1] with n cryptographic random bytes. The first
 // byte is never '7' or 'z'.
 void random(char* buf, int n);
-
-*/
 
 //////////////////////////// ZPAQL ///////////////////////////
 
@@ -1085,13 +1103,13 @@ private:
 // partial byte as context, adaptive m input mixer (without or with),
 // or SSE (without or with).
 
-struct Component {
+struct alignas(64) Component {
   size_t limit;   // max count for cm
   size_t cxt;     // saved context
   size_t a, b, c; // multi-purpose variables
-  Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
-  Array<U8> ht;   // ICM/ISSE hash table[0..size1][0..15] and MATCH buf
-  Array<U16> a16; // MIX weights
+  alignas(64) Array<U32> cm;  // cm[cxt] -> p in bits 31..10, n in 9..0; MATCH index
+  alignas(64) Array<U8> ht;   // ICM/ISSE hash table[0..size1][0..15] and MATCH buf
+  alignas(64) Array<U16> a16; // MIX weights
   void init();    // initialize to all 0
   Component() {init();}
 };
@@ -1117,7 +1135,7 @@ public:
 ///////////////////////// Predictor //////////////////////////
 
 // A predictor guesses the next bit
-class Predictor {
+class alignas(64) Predictor {
 public:
   Predictor(ZPAQL&);
   ~Predictor();
@@ -1131,22 +1149,23 @@ public:
   }
 private:
 
-  // Predictor state
+  // Vectorized Hot State aligned to 64-byte boundaries
+  alignas(64) int p[256];           // predictions
+  alignas(64) U32 h[256];           // unrolled copy of z.h
+  alignas(64) Component comp[256];  // the model, includes P
+  alignas(64) U16 squasht[4096];    // squash() lookup table
+  alignas(64) short stretcht[32768];// stretch() lookup table
+  alignas(64) int dt2k[256];        // division table for match: dt2k[i] = 2^12/i
+  alignas(64) int dt[1024];         // division table for cm: dt[i] = 2^16/(i+1.5)
+
   int c8;               // last 0...7 bits.
   int hmap4;            // c8 split into nibbles
-  int p[256];           // predictions
-  U32 h[256];           // unrolled copy of z.h
   ZPAQL& z;             // VM to compute context hashes, includes H, n
-  Component comp[256];  // the model, includes P
   bool initTables;      // are tables initialized?
 
   // Modeling support functions
   int predict0();       // default
   void update0(int y);  // default
-  int dt2k[256];        // division table for match: dt2k[i] = 2^12/i
-  int dt[1024];         // division table for cm: dt[i] = 2^16/(i+1.5)
-  U16 squasht[4096];    // squash() lookup table
-  short stretcht[32768];// stretch() lookup table
   StateTable st;        // next, cminit functions
   U8* pcode;            // JIT code for predict() and update()
   int pcode_size;       // length of pcode
@@ -1367,8 +1386,8 @@ public:
 private:
   ZPAQL z, pz;  // model and test postprocessor
   Encoder enc;  // arithmetic encoder containing predictor
-  SHA1 sha1;    // to test pz output
   Reader* in;   // input source
+  SHA1 sha1;    // to test pz output
   char sha1result[20];  // sha1 output
   enum {INIT, BLOCK1, SEG1, BLOCK2, SEG2} state;
   bool verify;  // if true then test by postprocessing
@@ -1510,126 +1529,5 @@ void compressBlock(StringBuffer* in, Writer* out, const char* method,
      const char* filename=0, const char* comment=0, bool dosha1=true);
 
 }  // namespace libzpaq
-
-/////////////////////////// lrzip functions //////////////////
-
-
-#include <stdio.h>
-#ifndef uchar
-#define uchar unsigned char
-#endif
-#define likely(x)	__builtin_expect(!!(x), 1)
-#define unlikely(x)	__builtin_expect(!!(x), 0)
-#define __maybe_unused	__attribute__((unused))
-
-typedef int64_t i64;
-
-void libzpaq::error(const char* msg) {  // print message and exit
-    fprintf(stderr, "ZPAQ Error: %s\n", msg);
-    exit(1);
-}
-
-struct bufRead: public libzpaq::Reader {
-	uchar *s_buf;
-	i64 *s_len;
-	i64 total_len;
-	int *last_pct;
-	bool progress;
-	int thread;
-	FILE *msgout;
-
-	bufRead(uchar *buf_, i64 *n_, i64 total_len_, int *last_pct_, bool progress_, int thread_, FILE *msgout_):
-		s_buf(buf_), s_len(n_), total_len(total_len_), last_pct(last_pct_), progress(progress_), thread(thread_), msgout(msgout_) {}
-
-	int get() {
-		if (progress && !(*s_len % 128)) {
-			int pct = (total_len > 0) ?
-				(total_len - *s_len) * 100 / total_len : 100;
-
-			if (pct / 10 != *last_pct / 10) {
-				int i;
-
-				fprintf(msgout, "\r\t\t\t\tZPAQ\t");
-				for (i = 0; i < thread; i++)
-					fprintf(msgout, "\t");
-				fprintf(msgout, "%d:%i%%  \r",
-					thread + 1, pct);
-				fflush(msgout);
-				*last_pct = pct;
-			}
-		}
-
-		if (likely(*s_len > 0)) {
-			(*s_len)--;
-			return ((int)(uchar)*s_buf++);
-		}
-		return -1;
-	} // read and return byte 0..255, or -1 at EOF
-
-	int read(char *buf, int n) {
-		if (unlikely(n > *s_len))
-			n = *s_len;
-
-		if (likely(n > 0)) {
-			*s_len -= n;
-			memcpy(buf, s_buf, n);
-		}
-		return n;
-	}
-};
-
-struct bufWrite: public libzpaq::Writer {
-	uchar *c_buf;
-	i64 *c_len;
-	bufWrite(uchar *buf_, i64 *n_): c_buf(buf_), c_len(n_) {}
-
-	void put(int c) {
-		c_buf[(*c_len)++] = (uchar)c;
-	}
-
-	void write(const char *buf, int n) {
-		memcpy(c_buf + *c_len, buf, n);
-		*c_len += n;
-	}
-};
-
-extern "C" void zpaq_compress(uchar *c_buf, i64 *c_len, uchar *s_buf, i64 s_len,
-		uchar *method, FILE *msgout, bool progress, int thread)
-{
-	i64 total_len = s_len;
-	int last_pct = 100;
-
-	bufRead bufR(s_buf, &s_len, total_len, &last_pct, progress, thread, msgout);
-	bufWrite bufW(c_buf, c_len);
-
-	/* REVERSION:
-	 * int n; // for StringBuffer
-	 * use StringBuffer now and call compressBlock directly with full buffer
-	 * THIS DID NOT WORK
-	 * It failed when zpaq was sent an incompressible block.
-	libzpaq::StringBuffer sb(s_len);	// init sb to length of buffer
-	sb.write(0, s_len);			// set out ptr to 0
-	n=bufR.read((char*)sb.data(), s_len);	// read all data to sb
-	s_buf = (uchar *) realloc(s_buf,1);	// resize s_buf so that it does not take up memory
-	if (n)
-		compressBlock(&sb, &bufW, (const char *) method, NULL, NULL, true);	// call compressBlock directly
-	else
-		libzpaq::error("Serious error: no data to compress!");		// something wrong
-	*/
-
-	compress (&bufR, &bufW, (const char *) method, 0, 0, true);
-}
-
-extern "C" void zpaq_decompress(uchar *s_buf, i64 *d_len, uchar *c_buf, i64 c_len,
-				FILE *msgout, bool progress, int thread)
-{
-	i64 total_len = c_len;
-	int last_pct = 100;
-
-	bufRead bufR(c_buf, &c_len, total_len, &last_pct, progress, thread, msgout);
-	bufWrite bufW(s_buf, d_len);
-
-	decompress(&bufR, &bufW);
-}
 
 #endif  // LIBZPAQ_H
