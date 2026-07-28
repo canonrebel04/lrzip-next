@@ -8,7 +8,7 @@ m4_define([v_ver], [v_maj.v_min.v_mic])
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 dnl Process this file with autoconf to produce a configure script.
-AC_INIT([lrzip-next],[v_ver],[pete@peterhyman.com])
+AC_INIT([lrzip-next], [0.14.2])
 AC_PREREQ([2.59])
 AC_CONFIG_SRCDIR([configure.ac])
 AC_CONFIG_MACRO_DIR([m4])

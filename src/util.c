@@ -45,6 +45,9 @@
 #ifdef HAVE_CTYPE_H
 # include <ctype.h>
 #endif
+#if defined(__AVX2__)
+# include <immintrin.h>
+#endif
 
 /* Macros for testing parameters */
 #define isparameter( parmstring, value )	(!strcasecmp( parmstring, value ))
@@ -637,4 +640,38 @@ bool decrypt_header(rzip_control *control, uchar *head, uchar *c_type,
 	memcpy(u_len, buf + 9, 8);
 	memcpy(last_head, buf + 17, 8);
 	return true;
+}
+
+void *stream_memcpy(void *dest, const void *src, size_t n)
+{
+#if defined(__AVX2__)
+	unsigned char *d = (unsigned char *)dest;
+	const unsigned char *s = (const unsigned char *)src;
+
+	/* Align destination buffer to 256-bit (32-byte) boundary */
+	while (n > 0 && ((uintptr_t)d & 31) != 0) {
+		*d++ = *s++;
+		n--;
+	}
+
+	/* Perform 256-bit aligned buffer transfers using AVX2 non-temporal stores */
+	while (n >= 32) {
+		__m256i chunk = _mm256_loadu_si256((const __m256i *)s);
+		_mm256_stream_si256((__m256i *)d, chunk);
+		d += 32;
+		s += 32;
+		n -= 32;
+	}
+
+	/* Copy remaining bytes */
+	while (n > 0) {
+		*d++ = *s++;
+		n--;
+	}
+
+	_mm_sfence();
+	return dest;
+#else
+	return memcpy(dest, src, n);
+#endif
 }
