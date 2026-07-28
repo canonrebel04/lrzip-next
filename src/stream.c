@@ -2204,7 +2204,7 @@ void write_stream(rzip_control *control, void *ss, int streamno, uchar *p, i64 l
 
 		n = MIN(sinfo->bufsize - sinfo->s[streamno].buflen, len);
 
-		stream_memcpy(sinfo->s[streamno].buf + sinfo->s[streamno].buflen, p, n);
+		memcpy(sinfo->s[streamno].buf + sinfo->s[streamno].buflen, p, n);
 		sinfo->s[streamno].buflen += n;
 		p += n;
 		len -= n;
@@ -2231,7 +2231,7 @@ i64 read_stream(rzip_control *control, void *ss, int streamno, uchar *p, i64 len
 		if (n > 0) {
 			if (unlikely(!s->buf))
 				fatal("Stream ran out prematurely, likely corrupt archive\n");
-			stream_memcpy(p, s->buf + s->bufp, n);
+			memcpy(p, s->buf + s->bufp, n);
 			s->bufp += n;
 			p += n;
 			len -= n;

@@ -117,7 +117,4 @@ static inline void cksem_wait(const rzip_control *control, cksem_t *cksem)
 }
 #endif
 
-void *stream_memcpy(void *dest, const void *src, size_t n);
-
 #endif
-
