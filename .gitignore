@@ -37,3 +37,5 @@ src/demo/decompress_demo
 src/demo/liblrzip_demo
 compile
 src/lrzip-next
+release_staging/
+*.tar.gz
