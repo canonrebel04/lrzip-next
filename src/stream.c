@@ -53,6 +53,9 @@
 #include "Bra.h"	//Filters
 #include "Delta.h"	//Delta Filter
 
+#include "dxt_preprocess.h"
+#include "deflate_preprocess.h"
+
 /* bzip3 */
 #include <libbz3.h>
 
@@ -153,6 +156,34 @@ bool join_pthread(rzip_control *control, pthread_t th, void **thread_return)
  * but move body to the end since it's a work function
 */
 static int lz4_compresses(rzip_control *control, uchar *s_buf, i64 s_len);
+
+/* Compute Shannon entropy of a buffer in bits per byte.
+ * Returns a value between 0.0 (all identical bytes) and 8.0 (uniform random).
+ * Uses a stack-local 256-bin histogram — no allocations, O(n) time.
+ */
+static inline double block_entropy(const unsigned char *buf, i64 len)
+{
+	unsigned int hist[256] = {0};
+	i64 i;
+	double entropy = 0.0;
+	double inv_len;
+
+	if (unlikely(len <= 0))
+		return 0.0;
+
+	for (i = 0; i < len; i++)
+		hist[buf[i]]++;
+
+	inv_len = 1.0 / (double)len;
+	for (i = 0; i < 256; i++) {
+		if (hist[i]) {
+			double p = (double)hist[i] * inv_len;
+			entropy -= p * log2(p);
+		}
+	}
+
+	return entropy;
+}
 
 /*
   ***** COMPRESSION FUNCTIONS *****
@@ -1626,11 +1657,49 @@ retry:
 			Delta_Encode(delta_state, control->delta, cti->s_buf,  cti->s_len);
 		}
 	}
+
+	/* Media-Aware Preprocessing Passes (DXT plane transpose + Deflate recompression) */
+	if (!NO_COMPRESS && cti->s_len >= 1024) {
+		unsigned char *prep_buf = NULL;
+		i64 prep_len = 0;
+
+		/* 1. DXT Texture Plane Separation (AOS -> SOA Transpose) */
+		if (dxt_transpose_buffer(cti->s_buf, cti->s_len, &prep_buf, &prep_len)) {
+			print_maxverbose("Thread %d: DXT texture plane separation applied (size %"PRId64" -> %"PRId64")\n",
+					 current_thread, cti->s_len, prep_len);
+			free(cti->s_buf);
+			cti->s_buf = prep_buf;
+			cti->s_len = prep_len;
+			cti->c_len = prep_len;
+		}
+		/* 2. Precomp-style Deflate Stream Recompression */
+		else if (deflate_scan_and_decompress(cti->s_buf, cti->s_len, &prep_buf, &prep_len)) {
+			print_maxverbose("Thread %d: Deflate stream recompression applied (size %"PRId64" -> %"PRId64")\n",
+					 current_thread, cti->s_len, prep_len);
+			free(cti->s_buf);
+			cti->s_buf = prep_buf;
+			cti->s_len = prep_len;
+			cti->c_len = prep_len;
+		}
+	}
+	/* Shannon entropy pre-check: skip compression for blocks that are
+	 * already compressed or essentially random (entropy > 7.9 bits/byte).
+	 * This is much cheaper than a full LZ4 trial compression. */
+	int skip_comp = 0;
+	if (!NO_COMPRESS && cti->c_len >= 64) {
+		double ent = block_entropy(cti->s_buf, cti->s_len);
+		if (ent > 7.9) {
+			print_maxverbose("Thread %d: Shannon entropy %.4f bits/byte > 7.9, skipping compression\n",
+					 current_thread, ent);
+			skip_comp = 1;
+		}
+	}
+
 	/* Very small buffers have issues to do with minimum amounts of ram
 	 * allocatable to a buffer combined with the MINIMUM_MATCH of rzip
 	 * being 31 bytes so don't bother trying to compress anything less
 	 * than 64 bytes. */
-	if (!NO_COMPRESS && cti->c_len >= 64) {
+	if (!NO_COMPRESS && !skip_comp && cti->c_len >= 64) {
 		/* Any Filter */
 		if (LZMA_COMPRESS)
 			ret = lzma_compress_buf(control, cti, current_thread);
@@ -1994,6 +2063,29 @@ retry:
 			uchar delta_state[DELTA_STATE_SIZE];
 			Delta_Init(delta_state);
 			Delta_Decode(delta_state, control->delta, uci->s_buf,  uci->u_len);
+		}
+	}
+
+	/* Reverse Media-Aware Preprocessing Passes (DXT untranspose + Deflate reconstruct) */
+	if (uci->s_buf && uci->u_len >= 24) {
+		unsigned char *post_buf = NULL;
+		i64 post_len = 0;
+
+		/* 1. Reverse DXT Untranspose (SOA -> AOS) */
+		if (dxt_untranspose_buffer(uci->s_buf, uci->u_len, &post_buf, &post_len)) {
+			print_maxverbose("Thread %d: DXT texture reverse untranspose restored (size %"PRId64" -> %"PRId64")\n",
+					 current_thread, uci->u_len, post_len);
+			free(uci->s_buf);
+			uci->s_buf = post_buf;
+			uci->u_len = post_len;
+		}
+		/* 2. Reverse Deflate Stream Reconstruction */
+		else if (deflate_reconstruct(uci->s_buf, uci->u_len, &post_buf, &post_len)) {
+			print_maxverbose("Thread %d: Deflate stream bit-exact reconstruction restored (size %"PRId64" -> %"PRId64")\n",
+					 current_thread, uci->u_len, post_len);
+			free(uci->s_buf);
+			uci->s_buf = post_buf;
+			uci->u_len = post_len;
 		}
 	}
 

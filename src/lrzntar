@@ -23,6 +23,7 @@ Extras: when an lrzip-next tarball is used with -d, -O, it gets extracted:
  -d: <path1> will decompress a <path1> lrzip-next tarball to current directory.
  -O: <path2> will decompress a -d specified lrzip-next tarball to <path2> path.
  -f: will force overwrites.
+ --sort-tar: sort files by extension before tar creation for better compression.
 
 Notice:
  - The input argument is always last, all options and their arguments precede.
@@ -36,6 +37,17 @@ Notice:
         printf "%s\n" "$hv"
         return 0
     fi
+    # Check for --sort-tar flag
+    local SORT_TAR=""
+    local filtered_args=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--sort-tar" ]]; then
+            SORT_TAR=1
+        else
+            filtered_args+=("$arg")
+        fi
+    done
+    set -- "${filtered_args[@]}"
     local p=("${@:1:$(($#-1))}") s="${!#}" vopt=("lrz") \
           v_w=0 v_S=0 v_D=0 v_p=0 v_q=0 v_L=0 \
           v_n=0 v_l=0 v_b=0 v_g=0 v_z=0 v_U=0 \
@@ -155,7 +167,13 @@ Notice:
                 return 1
             }
         fi
-        tar c "$s" | ${LRZIP_CMD} "${p[@]}"
+        if [[ -n "$SORT_TAR" ]]; then
+            # Sort files by extension to group similar content together
+            # This improves cross-file deduplication and ZPAQ context coherence
+            find "$s" -type f | sort -t. -k2 | tar c -T - | ${LRZIP_CMD} "${p[@]}"
+        else
+            tar c "$s" | ${LRZIP_CMD} "${p[@]}"
+        fi
         x=$?
     }
     return $x

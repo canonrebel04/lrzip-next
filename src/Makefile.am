@@ -10,6 +10,10 @@ libtmplrzip_next_la_SOURCES = \
 	runzip.c \
 	stream.c \
 	util.c \
+	dxt_preprocess.c \
+	dxt_preprocess.h \
+	deflate_preprocess.c \
+	deflate_preprocess.h \
 	include/lrzip_core.h \
 	include/lrzip_private.h \
 	include/rzip.h \
