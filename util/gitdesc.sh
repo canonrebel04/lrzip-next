@@ -68,12 +68,16 @@ init() {
 		[ $tagrev -gt 0 ] && micro=$micro-$tagrev-$commit
 		minor=$(echo $version | cut -d. -f2)
 		major=$(echo $version | cut -d. -f1)
+	elif [ -r VERSION.txt ] ; then
+		major=$(awk '/Major: / {printf "%s",$2; exit}' VERSION.txt)
+		minor=$(awk '/Minor: / {printf "%s",$2; exit}' VERSION.txt)
+		micro=$(awk '/Micro: / {printf "%s",$2; exit}' VERSION.txt)
 	elif [ -r VERSION ] ; then
 		major=$(awk '/Major: / {printf "%s",$2; exit}' VERSION)
 		minor=$(awk '/Minor: / {printf "%s",$2; exit}' VERSION)
 		micro=$(awk '/Micro: / {printf "%s",$2; exit}' VERSION)
 	else
-		die "Cannot find .git directory or VERSION file. Aborting"
+		die "Cannot find .git directory or VERSION.txt file. Aborting"
 	fi
 }
 
