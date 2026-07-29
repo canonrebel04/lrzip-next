@@ -79,6 +79,11 @@ init() {
 	else
 		die "Cannot find .git directory or VERSION.txt file. Aborting"
 	fi
+
+	# Fallbacks to prevent empty/invalid version macros in C builds
+	if [ -z "$major" ] || ! [[ "$major" =~ ^[0-9]+$ ]]; then major=0; fi
+	if [ -z "$minor" ] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then minor=15; fi
+	if [ -z "$micro" ]; then micro=0; fi
 }
 
 # don't use which as some systems may not have
