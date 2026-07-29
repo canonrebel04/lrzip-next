@@ -29,9 +29,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential autoconf automake libtool libgcrypt20-dev liblzo2-dev liblz4-dev libzstd-dev libbz2-dev libgpg-error-dev
-          curl -sSL https://github.com/kspiai/bzip3/releases/download/v1.5.1/bzip3-1.5.1.tar.xz | tar -xJ -C /tmp
-          cd /tmp/bzip3-1.5.1
-          ./configure --prefix=/usr && make -j$(nproc) && sudo make install
+          curl -sSL https://github.com/iczelia/bzip3/archive/refs/tags/1.5.3.tar.gz | tar -xz -C /tmp
+          cd /tmp/bzip3-1.5.3
+          ./autogen.sh && ./configure --prefix=/usr && make -j$(nproc) && sudo make install
 
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
